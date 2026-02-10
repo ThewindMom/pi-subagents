@@ -135,6 +135,28 @@ export function renderSubagentResult(
 		}
 		if (items.length) c.addChild(new Spacer(1));
 
+		// While running, show live progress (current tool + nested subagent progress + recent output)
+		if (isRunning && r.progress) {
+			const p = r.progress;
+			if (p.currentTool) {
+				const toolLine = p.currentToolArgs
+					? `${p.currentTool}: ${p.currentToolArgs.slice(0, 100)}${p.currentToolArgs.length > 100 ? "..." : ""}`
+					: p.currentTool;
+				c.addChild(new Text(theme.fg("warning", `> ${toolLine}`), 0, 0));
+			}
+			if (p.recentTools?.length) {
+				for (const t of p.recentTools.slice(0, 3)) {
+					const args = t.args.slice(0, 90) + (t.args.length > 90 ? "..." : "");
+					c.addChild(new Text(theme.fg("dim", `  ${t.tool}: ${args}`), 0, 0));
+				}
+			}
+			const recentLines = (p.recentOutput ?? []).slice(-8);
+			for (const line of recentLines) {
+				c.addChild(new Text(theme.fg("dim", `  ${line.slice(0, 120)}${line.length > 120 ? "..." : ""}`), 0, 0));
+			}
+			c.addChild(new Spacer(1));
+		}
+
 		if (output) c.addChild(new Markdown(output, 0, 0, mdTheme));
 		c.addChild(new Spacer(1));
 		if (r.skills?.length) {

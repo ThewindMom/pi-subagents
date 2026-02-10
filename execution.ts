@@ -151,6 +151,12 @@ export async function runSync(
 	}
 
 	const spawnEnv = { ...process.env };
+	// Recursion guard propagation: mark spawned `pi` process as running "inside" a subagent.
+	const parentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
+	const nextDepth = Number.isFinite(parentDepth) ? parentDepth + 1 : 1;
+	spawnEnv.PI_SUBAGENT_DEPTH = String(nextDepth);
+	spawnEnv.PI_SUBAGENT_MAX_DEPTH = process.env.PI_SUBAGENT_MAX_DEPTH ?? "2";
+
 	const mcpDirect = agent.mcpDirectTools;
 	if (mcpDirect?.length) {
 		spawnEnv.MCP_DIRECT_TOOLS = mcpDirect.join(",");
@@ -210,7 +216,13 @@ export async function runSync(
 			if (!line.trim()) return;
 			jsonlLines.push(line);
 			try {
-				const evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				const evt = JSON.parse(line) as {
+					type?: string;
+					message?: Message;
+					toolName?: string;
+					args?: unknown;
+					partialResult?: { content?: unknown; details?: unknown };
+				};
 				const now = Date.now();
 				progress.durationMs = now - startTime;
 
@@ -219,6 +231,69 @@ export async function runSync(
 					progress.currentTool = evt.toolName;
 					progress.currentToolArgs = extractToolArgsPreview((evt.args || {}) as Record<string, unknown>);
 					// Tool start is important - update immediately by forcing throttle reset
+					lastUpdateTime = 0;
+					scheduleUpdate();
+				}
+
+				if (evt.type === "tool_execution_update") {
+					const pushRecent = (lines: string[]) => {
+						for (const l of lines) {
+							const last = progress.recentOutput[progress.recentOutput.length - 1];
+							if (!l || l === last) continue;
+							progress.recentOutput.push(l);
+						}
+						if (progress.recentOutput.length > 50) {
+							progress.recentOutput.splice(0, progress.recentOutput.length - 50);
+						}
+					};
+
+					const fmtDur = (ms: number) => {
+						if (!Number.isFinite(ms) || ms < 0) return "-";
+						const s = Math.floor(ms / 1000);
+						if (s < 60) return `${s}s`;
+						const m = Math.floor(s / 60);
+						const rs = s % 60;
+						return `${m}m${String(rs).padStart(2, "0")}s`;
+					};
+					const fmtTok = (n: number) => {
+						if (!Number.isFinite(n) || n < 0) return "-";
+						if (n < 1000) return String(Math.floor(n));
+						return `${(n / 1000).toFixed(1)}k`;
+					};
+
+					// Special-case nested subagent progress: show agent/tool/tokens explicitly
+					if (evt.toolName === "subagent") {
+						const details = (evt.partialResult?.details || {}) as any;
+						const pgs: any[] = Array.isArray(details?.progress) ? details.progress : [];
+						if (pgs.length > 0) {
+							const mode = typeof details?.mode === "string" ? details.mode : "subagent";
+							const stepInfo =
+								typeof details?.currentStepIndex === "number" && typeof details?.totalSteps === "number"
+									? ` step ${details.currentStepIndex + 1}/${details.totalSteps}`
+									: "";
+							const active = pgs.filter((p) => p && typeof p === "object" && p.status === "running");
+							const shown = (active.length > 0 ? active : pgs).slice(0, 2);
+							const lines = shown.map((p) => {
+								const tool = p.currentTool ? ` tool=${p.currentTool}` : "";
+								const args = p.currentToolArgs ? `(${p.currentToolArgs})` : "";
+								return `[subagent ${mode}${stepInfo}] ${p.agent} ${p.status}${tool}${args} tok=${fmtTok(p.tokens)} tools=${p.toolCount} dur=${fmtDur(p.durationMs)}`;
+							});
+							pushRecent(lines);
+						}
+					}
+
+					// Generic partial tool output (fallback)
+					const partialText = evt.partialResult?.content ? extractTextFromContent(evt.partialResult.content) : "";
+					const normalized = partialText
+						.split("\n")
+						.map((l) => l.trim())
+						.filter(Boolean)
+						.filter((l) => l !== "(running...)" && l !== "running...")
+						.slice(-5)
+						.map((l) => `[${evt.toolName || "tool"}] ${l}`);
+					if (normalized.length > 0) pushRecent(normalized);
+
+					// Tool updates are important - force immediate UI refresh
 					lastUpdateTime = 0;
 					scheduleUpdate();
 				}
