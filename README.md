@@ -613,6 +613,27 @@ export PI_SUBAGENT_MAX_DEPTH=3  # allow one more level (use with caution)
 
 > Increasing the max depth increases the chance of accidental recursion and token cost.
 
+## Maintaining this fork (merge upstream)
+
+This fork is typically kept in sync with upstream using **merge** (not rebase). From a clean working tree:
+
+```bash
+./scripts/sync-upstream-merge.sh
+```
+
+After syncing, repin your local Pi install to the new commit:
+
+```bash
+pi remove git:github.com/ThewindMom/pi-subagents@<OLD_SHA>
+pi install git:github.com/ThewindMom/pi-subagents@<NEW_SHA>
+```
+
+Tip: get the new SHA via:
+
+```bash
+git rev-parse HEAD
+```
+
 ## Async observability
 
 Async runs write a dedicated observability folder:
